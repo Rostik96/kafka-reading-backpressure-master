@@ -1,0 +1,16 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: business-service
+
+business:
+  processing-time-ms: ${BUSINESS_PROCESSING_TIME:250}
+  max-in-flight: ${BUSINESS_MAX_IN_FLIGHT:32}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus

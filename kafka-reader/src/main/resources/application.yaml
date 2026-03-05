@@ -1,0 +1,38 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: kafka-reader
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      max-poll-records: 500
+    producer:
+      acks: 1
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+reader:
+  topic: letters
+  dlq-topic: letters.dlq
+  group-id: kafka-reader
+  business:
+    url: ${READER_BUSINESS_URL:http://localhost:8081/process}
+    read-timeout-ms: ${READER_BUSINESS_READ_TIMEOUT_MS:5000}
+    connection-timeout-ms: ${READER_BUSINESS_CONNECTION_TIMEOUT_MS:1000}
+  max-in-flight: 64
+  retry:
+    max-attempts: ${READER_RETRY_MAX_ATTEMPTS:6}
+    first-backoff-ms: ${READER_RETRY_FIRST_BACKOFF_MS:200}
+  burst-producer:
+    enabled: ${READER_BURST_PRODUCER_ENABLED:true}
+    batch-size: ${READER_BURST_PRODUCER_BATCH_SIZE:100}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
