@@ -30,9 +30,12 @@ services:
         MODULE: business-service
     environment:
       SERVER_PORT: 8081
+      SPRING_RSOCKET_SERVER_TRANSPORT: tcp
+      SPRING_RSOCKET_SERVER_PORT: 7000
       MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: health,info,metrics,prometheus
     ports:
       - "8081:8081"
+      - "7000:7000"
     healthcheck:
       test: [ "CMD", "curl", "-fsS", "http://localhost:8081/actuator/health" ]
       interval: 5s
@@ -53,7 +56,7 @@ services:
     environment:
       SERVER_PORT: 8080
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      READER_BUSINESS_URL: http://business-service:8081/process
+      READER_BUSINESS_URL: tcp://business-service:7000
       READER_TOPIC: letters
       READER_GROUP_ID: kafka-reader
       MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: health,info,metrics,prometheus

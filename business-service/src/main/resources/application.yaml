@@ -4,6 +4,10 @@ server:
 spring:
   application:
     name: business-service
+  rsocket:
+    server:
+      transport: ${SPRING_RSOCKET_SERVER_TRANSPORT:tcp}
+      port: ${SPRING_RSOCKET_SERVER_PORT:7000}
 
 business:
   processing-time-ms: ${BUSINESS_PROCESSING_TIME:250}

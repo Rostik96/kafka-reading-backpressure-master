@@ -1,25 +1,18 @@
 package dev.rost.kafkareader;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.messaging.rsocket.RSocketRequester;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestClient;
-import reactor.core.publisher.Mono;
-
-import static reactor.core.scheduler.Schedulers.boundedElastic;
+import reactor.core.publisher.Flux;
 
 @Service
 @RequiredArgsConstructor
 class BusinessServiceClient {
-    private final RestClient businessRestClient;
+    private final RSocketRequester requester;
 
-    Mono<Void> process(Request request) {
-        return Mono.fromRunnable(() -> {
-                    businessRestClient.post()
-                            .body(request)
-                            .retrieve()
-                            .toBodilessEntity();
-                })
-                .subscribeOn(boundedElastic())
-                .then();
+    Flux<String> process(Flux<Request> requests) {
+        return requester.route("process.channel")
+                .data(requests, Request.class)
+                .retrieveFlux(String.class);
     }
 }

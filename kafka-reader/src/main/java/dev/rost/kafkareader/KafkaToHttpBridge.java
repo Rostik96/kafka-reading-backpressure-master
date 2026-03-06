@@ -11,25 +11,22 @@ import org.springframework.boot.context.event.ApplicationStartedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestClientResponseException;
 import reactor.core.Disposable;
-import reactor.core.publisher.Mono;
+import reactor.core.publisher.Flux;
 import reactor.kafka.receiver.KafkaReceiver;
+import reactor.kafka.receiver.ReceiverRecord;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.UUID;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
-import static org.springframework.http.HttpStatus.TOO_MANY_REQUESTS;
-import static reactor.core.publisher.Mono.fromRunnable;
 import static reactor.util.retry.Retry.backoff;
 
 @Slf4j
 @Component
 @RequiredArgsConstructor
 class KafkaToHttpBridge {
-    @Value("${reader.max-in-flight}")
-    private final int readerMaxInFlight;
     @Value("${reader.retry.max-attempts}")
     private final int readerRetryMaxAttempts;
     @Value("${reader.retry.first-backoff-ms}")
@@ -39,6 +36,7 @@ class KafkaToHttpBridge {
     private final KafkaReceiver<String, String> kafkaReceiver;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final BusinessServiceClient businessServiceClient;
+    private final Map<String, PendingRecord> pendingRecords = new ConcurrentHashMap<>();
 
     private Disposable subscription;
     private Counter consumedCounter;
@@ -58,33 +56,35 @@ class KafkaToHttpBridge {
 
     @EventListener(ApplicationStartedEvent.class)
     void run() {
-        this.subscription = kafkaReceiver.receive()
+        var requests = kafkaReceiver.receive()
                 .doOnNext(__ -> consumedCounter.increment())
-                .onBackpressureDrop(record -> {
-                    log.warn("Dropping event due to backpressure");
-                    failedCounter.increment();
-                    sendToDlq(record.key(), record.value(), "backpressure_drop");
-                    // Acknowledge dropped records to avoid reprocessing loops under overload.
-                    record.receiverOffset().acknowledge();
+                .map(record -> {
+                    var messageId = "%s:%d:%d".formatted(record.topic(), record.partition(), record.offset());
+                    pendingRecords.put(messageId, new PendingRecord(record));
+                    return new Request(
+                            messageId,
+                            record.value(),
+                            Instant.now());
+                });
+
+        this.subscription = businessServiceClient.process(requests)
+                .doOnNext(this::handleResponse)
+                .retryWhen(backoff(readerRetryMaxAttempts, Duration.ofMillis(readerRetryFirstBackoffMs)))
+                .doOnError(error -> {
+                    log.error("RSocket pipeline failed after retries, restarting", error);
+                    drainPendingRecords("rsocket_error:%s".formatted(error.getClass().getSimpleName()));
                 })
-                .flatMap(record -> forward(record.key(), record.value())
-                                .then(fromRunnable(record.receiverOffset()::acknowledge)),
-                        readerMaxInFlight)
+                .onErrorResume(__ -> Flux.empty())
+                .repeatWhen(repeat -> repeat.delayElements(Duration.ofMillis(readerRetryFirstBackoffMs)))
                 .subscribe();
     }
 
-    private Mono<Void> forward(String key, String payload) {
-        var request = new Request(UUID.randomUUID().toString(), payload, Instant.now());
-        return businessServiceClient.process(request)
-                .doOnSuccess(__ -> forwardedCounter.increment())
-                .retryWhen(backoff(readerRetryMaxAttempts, Duration.ofMillis(readerRetryFirstBackoffMs))
-                        .filter(this::isRetriable))
-                .onErrorResume(error -> {
-                    log.warn("Dropping event after retries due to {}", error.getClass().getSimpleName());
-                    failedCounter.increment();
-                    sendToDlq(key, payload, "retries_exhausted");
-                    return Mono.empty();
-                });
+    private void handleResponse(String messageId) {
+        var pendingRecord = pendingRecords.remove(messageId);
+        if (pendingRecord == null)
+            return;
+        forwardedCounter.increment();
+        pendingRecord.record().receiverOffset().acknowledge();
     }
 
     private void sendToDlq(String key, String payload, String reason) {
@@ -99,17 +99,26 @@ class KafkaToHttpBridge {
                 });
     }
 
-    private boolean isRetriable(Throwable error) {
-        if (error instanceof RestClientResponseException respEx) {
-            var status = respEx.getStatusCode();
-            return status == TOO_MANY_REQUESTS || status.is5xxServerError();
-        }
-        return true;
-    }
-
     @PreDestroy
     void stop() {
+        drainPendingRecords("bridge_shutdown");
         if (subscription != null)
             subscription.dispose();
     }
+
+    private void drainPendingRecords(String reason) {
+        pendingRecords.values().stream()
+                .toList()
+                .forEach(pendingRecord -> {
+                    failedCounter.increment();
+                    var record = pendingRecord.record();
+                    sendToDlq(record.key(), record.value(), reason);
+                    record.receiverOffset().acknowledge();
+                });
+        pendingRecords.clear();
+    }
+
+    private record PendingRecord(
+            ReceiverRecord<String, String> record
+    ) {}
 }

@@ -7,13 +7,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.client.ClientHttpRequestFactory;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
-import org.springframework.web.client.RestClient;
+import org.springframework.messaging.rsocket.RSocketRequester;
 import reactor.kafka.receiver.KafkaReceiver;
 import reactor.kafka.receiver.ReceiverOptions;
 
-import java.time.Duration;
+import java.net.URI;
 import java.util.HashMap;
 import java.util.Set;
 
@@ -37,22 +35,10 @@ class Config {
         return KafkaReceiver.create(receiverOptions);
     }
 
-
     @Bean
-    RestClient businessRestClient(ClientHttpRequestFactory clientHttpRequestFactory,
-                                  @Value("${reader.business.url}") String readerBusinessUrl) {
-        return RestClient.builder()
-                .requestFactory(clientHttpRequestFactory)
-                .baseUrl(readerBusinessUrl)
-                .build();
-    }
-
-    @Bean
-    ClientHttpRequestFactory clientHttpRequestFactory(@Value("${reader.business.read-timeout-ms}") long readerBusinessReadTimeoutMs,
-                                                      @Value("${reader.business.connection-timeout-ms}") long readerBusinessConnectionTimeoutMs) {
-        return new SimpleClientHttpRequestFactory() {{
-            setConnectTimeout(Duration.ofMillis(readerBusinessConnectionTimeoutMs));
-            setReadTimeout(Duration.ofMillis(readerBusinessReadTimeoutMs));
-        }};
+    RSocketRequester requester(RSocketRequester.Builder builder,
+                               @Value("${reader.business.url}") String readerBusinessRSocketUrl) {
+        var uri = URI.create(readerBusinessRSocketUrl);
+        return builder.tcp(uri.getHost(), uri.getPort());
     }
 }
